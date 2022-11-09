@@ -5,17 +5,9 @@ from datetime import datetime
 from pathlib import Path
 from threading import Lock as threading_Lock
 from bs4 import BeautifulSoup
-import requests
-import lxml
 import yaml
 from warcio.archiveiterator import ArchiveIterator
 LOCALE_LOCK = threading_Lock()
-
-
-def get_request(url, filename):
-    req = requests.get(url)
-    fh = open(filename, 'w', encoding='UTF-8')
-    print(req.text, file=fh)
 
 
 def response_warc_record_gen(warc_filename):
@@ -30,64 +22,38 @@ def response_warc_record_gen(warc_filename):
             article_url = rec.rec_headers.get_header('WARC-Target-URI')
             warc_response_datetime = datetime.strptime(warc_response_date, date_format)
             warc_id = rec.rec_headers.get_header('WARC-Record-ID')
+            # Content-Length
             raw_html = rec.content_stream().read().decode(rec.rec_headers.get_header('WARC-X-Detected-Encoding'))
             yield article_url, warc_response_datetime, raw_html
 
 
-def get_url_data_from_warc_old(dirnb, warc_name, next_p_fun, multipage_comp):
-    # TODO: yaml
-    with open(f'URL_inventory', 'w') as yamlfile:
-        url_info_dict = {}
-        # TODO: warcokon iterál
-        warcpath = f'{dirname}/{warc_name}'
-        for a_url, warc_resp_date, raw_html in response_warc_record_gen(warcpath):
-            # print(a_url)
-            # url_cat = 'blacklist'
-            url_cat = 'simple'
-            next_p = []
-            urls = []
-            is_multi = multipage_comp.match(a_url)
-            is_next_p = next_p_fun(raw_html)
-            if is_multi:
-                #print(a_url)
-                url_cat = 'multi'
-            if is_next_p:
-                next_p.append(is_next_p)
-                if not is_multi:
-                    url_cat = 'first'
-            url_info_dict[a_url] = {'warc': warc_name, 'page_cat': url_cat, 'next_p': next_p, 'config': 'config', 'warc_date': warc_resp_date}
-    for k, v in url_info_dict.items():
-        print(k, v)
-    # url_yaml = yaml.dump(url_info_dict)# , sort_keys=True)
-    # write
-
-
 def get_url_data_from_warc(dirnb, warc_name, next_p_fun, multipage_comp):
-    # TODO: yaml
     with open(f'URL_inventory', 'w') as yamlfile:
         url_info_dict = {}
-        # TODO: warcokon iterál
         warcpath = f'{dirname}/{warc_name}'
+        urls, first = [], ''
         for a_url, warc_resp_date, raw_html in response_warc_record_gen(warcpath):
-            # print(a_url)
-            # url_cat = 'blacklist'
-            url_cat = 'simple'
-            next_p = []
-            urls = []
+            url_info_dict[a_url] = {'warc': warc_name, 'page_cat': 'simple', 'next_pages': [], 'config': 'config',
+                                    'warc_date': warc_resp_date}
             is_multi = multipage_comp.match(a_url)
             is_next_p = next_p_fun(raw_html)
             if is_multi:
-                #print(a_url)
-                url_cat = 'multi'
+                url_info_dict[a_url]['page_cat'] = 'ignore'
             if is_next_p:
-                next_p.append(is_next_p)
-                if not is_multi:
-                    url_cat = 'first'
-            url_info_dict[a_url] = {'warc': warc_name, 'page_cat': url_cat, 'next_p': next_p, 'config': 'config', 'warc_date': warc_resp_date}
+                if len(urls) == 0:
+                    url_info_dict[a_url]['page_cat'] = 'multi'
+                    first = a_url
+                urls.append(is_next_p)
+            else:
+                if len(urls) > 0:  # az utolsó többedik oldal / egy másik oldal
+                    # TODO: ez így akkor működik, ha nem ékelődik más az összetartozó oldalak közé az iterációkor
+                    url_info_dict[first]['next_pages'] = urls
+                    urls, first = [], ''
     for k, v in url_info_dict.items():
         print(k, v)
     # url_yaml = yaml.dump(url_info_dict)# , sort_keys=True)
-    # write
+    with open('telex_koronavirus_urls.yaml', 'w') as outfile:
+        yaml.dump(url_info_dict, outfile, default_flow_style=False)
 
 
 def next_page_of_article_telex(curr_html):  # https://telex.hu/koronavirus/2020/11/12/koronavirus-pp-2020-11-12/elo
@@ -99,7 +65,6 @@ def next_page_of_article_telex(curr_html):  # https://telex.hu/koronavirus/2020/
                 href = pagelink.attrs['href']
                 if href[-1].isdigit() and int(href[-1]) == current_pagenum + 1:
                     next_page = f'https://telex.hu{href}'
-                    #print(next_page)
                     return next_page
     return None
 
